@@ -29,6 +29,7 @@ namespace NHC_Feed_Reader
             public string eventNotification_Agency { get; set; }
             public string eventNotification_Title { get; set; }
             public string eventNotification_URL { get; set; }
+            public string eventNotification_ImageURL { get; set; }
             public long eventNotification_DatetimeEpoch { get; set; }
             public string eventNotification_Category { get; set; }
             public string eventNotification_Type { get; set; }
@@ -67,6 +68,10 @@ namespace NHC_Feed_Reader
             public double Longitude { get; set; }
         }
 
+        public class HurricaneSeasonStatus
+        {
+            bool isHurricaneSeason { get; set; }
+        }
         public static void Add_Event_Notification(ConfigFiles jsonConfigPaths, Event_Notification eventNotification)
         {
 
@@ -93,7 +98,8 @@ namespace NHC_Feed_Reader
                 MySqlCommand cmd = conn.CreateCommand();
                 cmd.Connection = conn;
 
-                cmd.CommandText = "INSERT INTO `geo_data`.`geo_events` (`geo_event_agency`,`geo_event_title`,`geo_event_url`,`geo_event_starttime`,`geo_event_category`,`geo_event_type`,`geo_event_ident`,`geo_event_location_latitude`,`geo_event_location_longitude`,`geo_event_notify`) VALUES (@event_notification_agency,@event_notification_title,@event_notification_url,FROM_UNIXTIME(@event_notification_datetime),@event_notification_category,@event_notification_type,@event_notification_ident,@event_notification_latitude,@event_notification_longitude,1);";
+                cmd.CommandText = "INSERT INTO `event_data`.`geo_events` (`geo_event_agency`,`geo_event_title`,`geo_event_url`,`geo_event_starttime`,`geo_event_category`,`geo_event_type`,`geo_event_ident`,`geo_event_location_latitude`,`geo_event_location_longitude`,`geo_event_notify`,`geo_event_image_url`) VALUES (@event_notification_agency,@event_notification_title,@event_notification_url,FROM_UNIXTIME(@event_notification_datetime),@event_notification_category,@event_notification_type,@event_notification_ident,@event_notification_latitude,@event_notification_longitude,1,@event_notification_image_url);";
+                cmd.Prepare();
 
                 cmd.Parameters.AddWithValue("@event_notification_agency", eventNotification.eventNotification_Agency);
                 cmd.Parameters.AddWithValue("@event_notification_title", eventNotification.eventNotification_Title);
@@ -104,7 +110,7 @@ namespace NHC_Feed_Reader
                 cmd.Parameters.AddWithValue("@event_notification_ident", eventNotification.eventNotification_UniqueID);
                 cmd.Parameters.AddWithValue("@event_notification_latitude", eventNotification.eventNotification_Latitude);
                 cmd.Parameters.AddWithValue("@event_notification_longitude", eventNotification.eventNotification_Longitude);
-                cmd.Prepare();
+                cmd.Parameters.AddWithValue("@event_notification_image_url", eventNotification.eventNotification_ImageURL);
 
                 cmd.ExecuteNonQuery();
 
@@ -116,7 +122,34 @@ namespace NHC_Feed_Reader
                 if (errorcode != 1062)
                 {
                     Console.WriteLine("Notification Error:\t" + ex.Message);
-                    Console.Read();
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+            }
+
+            try
+            {
+                MySqlCommand cmd = conn.CreateCommand();
+                cmd.Connection = conn;
+
+                cmd.CommandText = "UPDATE `event_data`.`geo_events` SET `geo_event_notified` = NOW() WHERE `geo_event_agency` = @event_notification_agency AND `geo_event_title` = @event_notification_title AND `geo_event_starttime` < DATE_SUB(NOW(), INTERVAL 120 MINUTE);";
+                cmd.Prepare();
+
+                cmd.Parameters.AddWithValue("@event_notification_agency", eventNotification.eventNotification_Agency);
+                cmd.Parameters.AddWithValue("@event_notification_title", eventNotification.eventNotification_Title);
+
+                cmd.ExecuteNonQuery();
+
+                cmd.Dispose();
+            }
+            catch (MySqlException ex)
+            {
+                int errorcode = ex.Number;
+                if (errorcode != 1062)
+                {
+                    Console.WriteLine("Notification Error:\t" + ex.Message);
                 }
             }
             catch (Exception e)
@@ -229,8 +262,10 @@ namespace NHC_Feed_Reader
             return nearestShoreLineCoordinates;
         }
 
-        public static void Process_NHC_Feed(ConfigFiles jsonConfigPaths, string feedURL, List<Coordinates> shorelineCoordinatesList)
+        public static void Process_NHC_Feed(ConfigFiles jsonConfigPaths, string basin, List<Coordinates> shorelineCoordinatesList)
         {
+            string feedURL = "https://www.nhc.noaa.gov/gis-" + basin + ".xml";
+
             XNamespace nhcNS = "https://www.nhc.noaa.gov";
 
             string Title, pubDate, Description;
@@ -388,8 +423,8 @@ namespace NHC_Feed_Reader
 
                     DateTime dateValue = DateTime.ParseExact(Cyclone_Feed_Item.pubDate, "ddd, dd MMM yyyy HH:mm:ss GMT", CultureInfo.InvariantCulture).ToUniversalTime();
 
-                    string dateTimeString = dateValue.ToString("yyyy-MM-dd HH:mm:ss");
-                    Console.WriteLine(dateTimeString);
+                    string unique_id_string = centerLatitude.ToString() + "," + centerLongitude.ToString();
+                    Console.WriteLine(unique_id_string);
                     Event_Notification eventNotification = new Event_Notification();
                     eventNotification.eventNotification_Agency = "48945";
                     eventNotification.eventNotification_Category = "NHCAdvisory";
@@ -397,12 +432,23 @@ namespace NHC_Feed_Reader
                     eventNotification.eventNotification_Title = Cyclone_Feed_Item.Title;
                     eventNotification.eventNotification_Latitude = centerLatitude;
                     eventNotification.eventNotification_Longitude = centerLongitude;
-                    eventNotification.eventNotification_UniqueID = Cyclone_Feed_Item.Cyclone_Details.ATCF + " " + dateTimeString;
-
+                    eventNotification.eventNotification_UniqueID = Cyclone_Feed_Item.Cyclone_Details.ATCF + " " + unique_id_string;
                     TimeSpan t = dateValue - new DateTime(1970, 1, 1);
                     long dateTimeEpoch = (long)t.TotalSeconds;
 
                     eventNotification.eventNotification_DatetimeEpoch = dateTimeEpoch;
+                    if(basin.Equals("at"))
+                    {
+                        eventNotification.eventNotification_ImageURL = "https://www.nhc.noaa.gov/xgtwo/two_atl_5d0.png";
+                    }
+                    if(basin.Equals("ep"))
+                    {
+                        eventNotification.eventNotification_ImageURL = "https://www.nhc.noaa.gov/xgtwo/two_pac_5d0.png";
+                    }
+                    if(basin.Equals("cp"))
+                    {
+                        eventNotification.eventNotification_ImageURL = "https://www.nhc.noaa.gov/xgtwo/two_cpac_5d0.png";
+                    }
 
                     Add_Event_Notification(jsonConfigPaths, eventNotification);
                 }
@@ -421,7 +467,7 @@ namespace NHC_Feed_Reader
             conn_string_builder.Server = "localhost";
             conn_string_builder.UserID = "geo_events_add";
             conn_string_builder.Password = "2Hx3QqMlTs_v&i-=ecyfXgnAo+";
-            conn_string_builder.Database = "geo_data";
+            conn_string_builder.Database = "event_data";
 
             conn = new MySqlConnection(conn_string_builder.ToString());
             try
@@ -439,7 +485,7 @@ namespace NHC_Feed_Reader
             {
                 MySqlCommand cmd = conn.CreateCommand();
 
-                cmd.CommandText = "SELECT `geo_id`,`geo_event_agency`,`geo_event_title`,`geo_event_description`,`geo_event_starttime`, `geo_event_location_latitude`,`geo_event_location_longitude` FROM `geo_data`.`geo_events` WHERE `geo_event_type` = @event_list AND DATE_SUB(NOW(),INTERVAL 5 DAY) < `geo_event_starttime`;";
+                cmd.CommandText = "SELECT `geo_id`,`geo_event_agency`,`geo_event_title`,`geo_event_description`,`geo_event_starttime`, `geo_event_location_latitude`,`geo_event_location_longitude` FROM `event_data`.`geo_events` WHERE `geo_event_type` = @event_list AND DATE_SUB(NOW(),INTERVAL 5 DAY) < `geo_event_starttime`;";
                 cmd.Parameters.AddWithValue("@event_list", event_list);
                 cmd.Prepare();
 
@@ -462,20 +508,18 @@ namespace NHC_Feed_Reader
             }
             catch (Exception erro)
             {
-                Console.WriteLine(erro);
-                markerString = erro.Message;
+                Console.WriteLine(erro.Message);
             }
 
             markerString = markerString + "</markers>";
 
-            File.WriteAllText(@"C:\Users\tigershark2020\Documents\Web\live\xml\nhc_advisories.xml", markerString);
+            File.WriteAllText(@"D:\Web\live\xml\nhc_advisories.xml", markerString);
 
         }
 
-        static void Main(string[] args)
+        public static void Update_Hurricane_Details(bool isHurricaneSeason)
         {
-
-            string configFilePaths = "filePaths.json";
+            string configFilePaths = "C:/Users/tigershark2020/Documents/Credentials/Events/filePaths.json";
             bool exists = File.Exists(configFilePaths);
             string json = null;
 
@@ -499,14 +543,50 @@ namespace NHC_Feed_Reader
 
                 foreach (string basin in basinArray)
                 {
-                    string feedURL = "https://www.nhc.noaa.gov/gis-" + basin + ".xml";
-
-                    Process_NHC_Feed(jsonConfigPaths, feedURL, shorelineCoordinatesList);
-                    string event_list = "NHCAdvisory";
-                    Generate_Google_Maps_Marker_File(event_list);
+                    if(basin.Equals("ep"))
+                    {
+                        Process_NHC_Feed(jsonConfigPaths, basin, shorelineCoordinatesList);
+                        string event_list = "NHCAdvisory";
+                        Generate_Google_Maps_Marker_File(event_list);
+                    }
                 }
             }
+        }
 
+        static void Main(string[] args)
+        {
+            DateTime currentDate = DateTime.Now;
+            DateTime hurricaneSeasonStart = new DateTime(currentDate.Year, 6, 1);
+            DateTime hurricaneSeasonEnd = new DateTime(currentDate.Year, 11, 30);
+
+            DateTime easternNorthPacificHurricaneSeasonStart = new DateTime(currentDate.Year, 5, 15);
+
+            bool isHurricaneSeason = ((currentDate >= hurricaneSeasonStart) && (currentDate >= hurricaneSeasonEnd)) ? true : false;
+            bool isHurricaneSeasonEasternNorthPacific = ((currentDate >= easternNorthPacificHurricaneSeasonStart) && (currentDate >= hurricaneSeasonEnd)) ? true : false;
+
+            string hurricaneSeasonStartString = hurricaneSeasonStart.ToString();
+            string hurricaneSeasonEndString = hurricaneSeasonEnd.ToString();
+
+            if (isHurricaneSeasonEasternNorthPacific)
+            {
+                if (isHurricaneSeason)
+                {
+                    Update_Hurricane_Details(isHurricaneSeason);
+                }
+                /*
+                else
+                {
+                    Console.WriteLine("Hurricane season runs between " + hurricaneSeasonStart.ToString() + " and " + hurricaneSeasonEnd.ToString());
+                }
+                */
+            }
+            /*
+            else
+            {
+                Console.WriteLine("Hurricane season runs between " + hurricaneSeasonStart.ToString() + " and " + hurricaneSeasonEnd.ToString());
+                Console.WriteLine("Eastern North Pacific Hurricane season runs between " + easternNorthPacificHurricaneSeasonStart.ToString() + " and " + hurricaneSeasonEnd.ToString());
+            }
+            */
         }
     }
 }
